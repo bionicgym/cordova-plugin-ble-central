@@ -14,6 +14,8 @@
 
 package com.megster.cordova.ble.central;
 
+import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Activity;
 
 import android.bluetooth.*;
@@ -32,6 +34,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 
 /**
@@ -51,13 +56,14 @@ public class Peripheral extends BluetoothGattCallback {
 
     private static final int FAKE_PERIPHERAL_RSSI = 0x7FFFFFFF;
 
-    private BluetoothDevice device;
+    private final BluetoothDevice device;
     private byte[] advertisingData;
+    private Boolean isConnectable = null;
     private int advertisingRSSI;
     private boolean autoconnect = false;
     private boolean connected = false;
     private boolean connecting = false;
-    private ConcurrentLinkedQueue<BLECommand> commandQueue = new ConcurrentLinkedQueue<BLECommand>();
+    private final ConcurrentLinkedQueue<BLECommand> commandQueue = new ConcurrentLinkedQueue<BLECommand>();
     private final Map<Integer, L2CAPContext> l2capContexts = new HashMap<Integer, L2CAPContext>();
     private final AtomicBoolean bleProcessing = new AtomicBoolean();
 
@@ -71,7 +77,7 @@ public class Peripheral extends BluetoothGattCallback {
     private CallbackContext bondStateCallback;
     private Activity currentActivity;
 
-    private Map<String, SequentialCallbackContext> notificationCallbacks = new HashMap<String, SequentialCallbackContext>();
+    private final Map<String, SequentialCallbackContext> notificationCallbacks = new HashMap<String, SequentialCallbackContext>();
 
     public Peripheral(BluetoothDevice device) {
 
@@ -83,14 +89,14 @@ public class Peripheral extends BluetoothGattCallback {
 
     }
 
-    public Peripheral(BluetoothDevice device, int advertisingRSSI, byte[] scanRecord) {
-
+    public Peripheral(BluetoothDevice device, int advertisingRSSI, byte[] scanRecord, Boolean isConnectable) {
         this.device = device;
         this.advertisingRSSI = advertisingRSSI;
         this.advertisingData = scanRecord;
-
+        this.isConnectable = isConnectable;
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     private void gattConnect() {
 
         closeGatt();
@@ -100,14 +106,10 @@ public class Peripheral extends BluetoothGattCallback {
         callbackCleanup("Aborted by new connect call");
 
         BluetoothDevice device = getDevice();
-        if (Build.VERSION.SDK_INT < 23) {
-            gatt = device.connectGatt(currentActivity, autoconnect, this);
-        } else {
-            gatt = device.connectGatt(currentActivity, autoconnect, this, BluetoothDevice.TRANSPORT_LE);
-        }
-
+        gatt = device.connectGatt(currentActivity, autoconnect, this, BluetoothDevice.TRANSPORT_LE);
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public void connect(CallbackContext callbackContext, Activity activity, boolean auto) {
         currentActivity = activity;
         autoconnect = auto;
@@ -121,6 +123,7 @@ public class Peripheral extends BluetoothGattCallback {
 
     // the app requested the central disconnect from the peripheral
     // disconnect the gatt, do not call connectCallback.error
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public void disconnect() {
         connected = false;
         connecting = false;
@@ -133,6 +136,7 @@ public class Peripheral extends BluetoothGattCallback {
 
     // the peripheral disconnected
     // always call connectCallback.error to notify the app
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public void peripheralDisconnected(String message) {
         connected = false;
         connecting = false;
@@ -148,6 +152,7 @@ public class Peripheral extends BluetoothGattCallback {
         callbackCleanup(message);
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     private void closeGatt() {
         BluetoothGatt localGatt;
         synchronized (this) {
@@ -161,6 +166,7 @@ public class Peripheral extends BluetoothGattCallback {
     }
 
     // notify the phone that the peripheral disconnected
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     private void sendDisconnectMessage(String messageContent) {
         if (connectCallback != null) {
             JSONObject message = this.asJSONObject(messageContent);
@@ -188,14 +194,11 @@ public class Peripheral extends BluetoothGattCallback {
         requestMtuCallback = null;
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public void requestMtu(CallbackContext callback, int mtuValue) {
         LOG.d(TAG, "requestMtu mtu=%d", mtuValue);
         if (gatt == null) {
             callback.error("No GATT");
-            return;
-        }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            callback.error("Android version does not support requestMtu");
             return;
         }
 
@@ -206,12 +209,11 @@ public class Peripheral extends BluetoothGattCallback {
         }
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public void requestConnectionPriority(int priority) {
         if (gatt != null) {
             LOG.d(TAG, "requestConnectionPriority priority=" + priority);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                gatt.requestConnectionPriority(priority);
-            }
+            gatt.requestConnectionPriority(priority);
         }
     }
 
@@ -219,7 +221,7 @@ public class Peripheral extends BluetoothGattCallback {
      * Uses reflection to refresh the device cache. This *might* be helpful if a peripheral changes
      * services or characteristics and does not correctly implement Service Changed 0x2a05
      * on Generic Attribute Service 0x1801.
-     *
+     * <p>
      * Since this uses an undocumented API it's not guaranteed to work.
      *
      */
@@ -237,6 +239,7 @@ public class Peripheral extends BluetoothGattCallback {
                         Handler handler = new Handler();
                         LOG.d(TAG, "Waiting " + timeoutMillis + " milliseconds before discovering services");
                         handler.postDelayed(new Runnable() {
+                            @SuppressLint("MissingPermission")
                             @Override
                             public void run() {
                                 if (gatt != null) {
@@ -266,6 +269,7 @@ public class Peripheral extends BluetoothGattCallback {
         return advertisingData == null;
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public JSONObject asJSONObject()  {
 
         JSONObject json = new JSONObject();
@@ -280,6 +284,10 @@ public class Peripheral extends BluetoothGattCallback {
             if (advertisingRSSI != FAKE_PERIPHERAL_RSSI) {
                 json.put("rssi", advertisingRSSI);
             }
+
+            if (this.isConnectable != null) {
+                json.put("connectable", this.isConnectable.booleanValue());
+            }
         } catch (JSONException e) { // this shouldn't happen
             e.printStackTrace();
         }
@@ -287,6 +295,7 @@ public class Peripheral extends BluetoothGattCallback {
         return json;
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public JSONObject asJSONObject(String errorMessage)  {
 
         JSONObject json = new JSONObject();
@@ -302,6 +311,7 @@ public class Peripheral extends BluetoothGattCallback {
         return json;
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public JSONObject asJSONObject(BluetoothGatt gatt) {
 
         JSONObject json = asJSONObject();
@@ -377,6 +387,7 @@ public class Peripheral extends BluetoothGattCallback {
         return device;
     }
 
+    @SuppressLint("MissingPermission")
     @Override
     public void onServicesDiscovered(BluetoothGatt gatt, int status) {
         super.onServicesDiscovered(gatt, status);
@@ -404,6 +415,7 @@ public class Peripheral extends BluetoothGattCallback {
         }
     }
 
+    @SuppressLint("MissingPermission")
     @Override
     public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
 
@@ -424,9 +436,15 @@ public class Peripheral extends BluetoothGattCallback {
 
     }
 
+    @TargetApi(32 /*S_V2*/)
     @Override
     public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
         super.onCharacteristicChanged(gatt, characteristic);
+        if (Build.VERSION.SDK_INT >= 33) {
+            // handled by new callback below
+            return;
+        }
+
         LOG.d(TAG, "onCharacteristicChanged %s", characteristic);
 
         SequentialCallbackContext callback = notificationCallbacks.get(generateHashKey(characteristic));
@@ -436,15 +454,55 @@ public class Peripheral extends BluetoothGattCallback {
         }
     }
 
+    @RequiresApi(api = 33 /*TIRAMISU*/)
+    @Override
+    public void onCharacteristicChanged(@NonNull BluetoothGatt gatt, @NonNull BluetoothGattCharacteristic characteristic, @NonNull byte[] data) {
+        super.onCharacteristicChanged(gatt, characteristic, data);
+        LOG.d(TAG, "onCharacteristicChanged (api:33) %s", characteristic);
+
+        SequentialCallbackContext callback = notificationCallbacks.get(generateHashKey(characteristic));
+
+        if (callback != null) {
+            callback.sendSequentialResult(data);
+        }
+    }
+
+    @TargetApi(32 /*S_V2*/)
     @Override
     public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
         super.onCharacteristicRead(gatt, characteristic, status);
+        if (Build.VERSION.SDK_INT >= 33) {
+            // handled by new callback below
+            return;
+        }
+
         LOG.d(TAG, "onCharacteristicRead %s", characteristic);
 
         synchronized(this) {
             if (readCallback != null) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     readCallback.success(characteristic.getValue());
+                } else {
+                    readCallback.error("Error reading " + characteristic.getUuid() + " status=" + status);
+                }
+
+                readCallback = null;
+            }
+        }
+
+        commandCompleted();
+    }
+
+    @RequiresApi(api = 33 /*TIRAMISU*/)
+    @Override
+    public void onCharacteristicRead(@NonNull BluetoothGatt gatt, @NonNull BluetoothGattCharacteristic characteristic, @NonNull byte[] value, int status) {
+        super.onCharacteristicRead(gatt, characteristic, value, status);
+        LOG.d(TAG, "onCharacteristicRead (api:33) %s", characteristic);
+
+        synchronized(this) {
+            if (readCallback != null) {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    readCallback.success(value);
                 } else {
                     readCallback.error("Error reading " + characteristic.getUuid() + " status=" + status);
                 }
@@ -515,16 +573,25 @@ public class Peripheral extends BluetoothGattCallback {
     }
 
     // Update rssi and scanRecord.
+    public void update(int rssi, byte[] scanRecord, boolean isConnectable) {
+        this.advertisingRSSI = rssi;
+        this.advertisingData = scanRecord;
+        this.isConnectable = isConnectable;
+    }
+
+
     public void update(int rssi, byte[] scanRecord) {
         this.advertisingRSSI = rssi;
         this.advertisingData = scanRecord;
     }
+
 
     public void updateRssi(int rssi) {
         advertisingRSSI = rssi;
     }
 
     // This seems way too complicated
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     private void registerNotifyCallback(CallbackContext callbackContext, UUID serviceUUID, UUID characteristicUUID) {
 
         if (gatt == null) {
@@ -571,22 +638,41 @@ public class Peripheral extends BluetoothGattCallback {
             return;
         }
 
+        byte[] value;
         // prefer notify over indicate
         if ((characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0) {
-            descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
         } else if ((characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0) {
-            descriptor.setValue(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE);
+            value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
         } else {
             LOG.w(TAG, "Characteristic %s does not have NOTIFY or INDICATE property set", characteristicUUID);
+            callbackContext.error("Set notification failed for " + characteristicUUID + "(missing NOTIFY or INDICATE property)");
+            notificationCallbacks.remove(key);
+            commandCompleted();
+            return;
         }
 
-        if (!gatt.writeDescriptor(descriptor)) {
-            callbackContext.error("Failed to set client characteristic notification for " + characteristicUUID);
+        if (Build.VERSION.SDK_INT >= 33) {
+            int status = gatt.writeDescriptor(descriptor, value);
+            success = status == BluetoothStatusCodes.SUCCESS;
+            if (!success) {
+                callbackContext.error("Failed to set client characteristic notification for " + characteristicUUID + " (status code " + status + ")");
+            }
+        } else {
+            descriptor.setValue(value);
+            success = gatt.writeDescriptor(descriptor);
+            if (!success) {
+                callbackContext.error("Failed to set client characteristic notification for " + characteristicUUID);
+            }
+        }
+
+        if (!success) {
             notificationCallbacks.remove(key);
             commandCompleted();
         }
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     private void removeNotifyCallback(CallbackContext callbackContext, UUID serviceUUID, UUID characteristicUUID) {
 
         if (gatt == null) {
@@ -618,8 +704,12 @@ public class Peripheral extends BluetoothGattCallback {
         if (gatt.setCharacteristicNotification(characteristic, false)) {
             BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIGURATION_UUID);
             if (descriptor != null) {
-                descriptor.setValue(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE);
-                gatt.writeDescriptor(descriptor);
+                if (Build.VERSION.SDK_INT >= 33) {
+                    gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE);
+                } else {
+                    descriptor.setValue(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE);
+                    gatt.writeDescriptor(descriptor);
+                }
             }
             callbackContext.success();
         } else {
@@ -664,6 +754,7 @@ public class Peripheral extends BluetoothGattCallback {
         return characteristic;
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     private void readCharacteristic(CallbackContext callbackContext, UUID serviceUUID, UUID characteristicUUID) {
 
         if (gatt == null) {
@@ -706,6 +797,7 @@ public class Peripheral extends BluetoothGattCallback {
 
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     private void readRSSI(CallbackContext callbackContext) {
 
         if (gatt == null) {
@@ -756,6 +848,7 @@ public class Peripheral extends BluetoothGattCallback {
         return characteristic;
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     private void writeCharacteristic(CallbackContext callbackContext, UUID serviceUUID, UUID characteristicUUID, byte[] data, int writeType) {
 
         if (gatt == null) {
@@ -782,16 +875,25 @@ public class Peripheral extends BluetoothGattCallback {
 
         boolean success = false;
 
-        characteristic.setValue(data);
-        characteristic.setWriteType(writeType);
         synchronized(this) {
             writeCallback = callbackContext;
-
-            if (gatt.writeCharacteristic(characteristic)) {
-                success = true;
+            if (Build.VERSION.SDK_INT >= 33) {
+                int status = gatt.writeCharacteristic(characteristic, data, writeType);
+                success = status == BluetoothStatusCodes.SUCCESS;
+                if (!success) {
+                    LOG.d(TAG,"BLE Write failed: %s", status);
+                    writeCallback = null;
+                    callbackContext.error("Write failed with status code " + status);
+                }
             } else {
-                writeCallback = null;
-                callbackContext.error("Write failed");
+                characteristic.setValue(data);
+                characteristic.setWriteType(writeType);
+                success = gatt.writeCharacteristic(characteristic);
+                if (!success) {
+                    LOG.d(TAG,"BLE Write failed");
+                    writeCallback = null;
+                    callbackContext.error("Write failed");
+                }
             }
         }
 
@@ -875,6 +977,7 @@ public class Peripheral extends BluetoothGattCallback {
         getOrAddL2CAPContext(psm).writeL2CapChannel(callbackContext, data);
     }
 
+    @SuppressLint("MissingPermission")
     private void callbackCleanup(String message) {
         synchronized(this) {
             if (readCallback != null) {
@@ -911,6 +1014,7 @@ public class Peripheral extends BluetoothGattCallback {
     }
 
     // command finished, queue the next command
+    @SuppressLint("MissingPermission")
     private void commandCompleted() {
         LOG.d(TAG,"Processing Complete");
         bleProcessing.set(false);
@@ -918,6 +1022,7 @@ public class Peripheral extends BluetoothGattCallback {
     }
 
     // process the queue
+    @SuppressLint("MissingPermission")
     private void processCommands() {
         final boolean canProcess = bleProcessing.compareAndSet(false, true);
         if (!canProcess) { return; }
@@ -963,6 +1068,7 @@ public class Peripheral extends BluetoothGattCallback {
         return serviceUUID + "|" + characteristic.getUuid() + "|" + characteristic.getInstanceId();
     }
 
+    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public void connectL2cap(CallbackContext callbackContext, int psm, boolean secureChannel) {
         getOrAddL2CAPContext(psm).connectL2cap(callbackContext, secureChannel);
     }
@@ -997,7 +1103,7 @@ public class Peripheral extends BluetoothGattCallback {
         }
     }
 
-    @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
+    @RequiresPermission(allOf = { "android.permission.BLUETOOTH_CONNECT", "android.permission.BLUETOOTH_SCAN" })
     public void bond(CallbackContext callbackContext, BluetoothAdapter bluetoothAdapter, boolean usePairingDialog) {
         if (bondStateCallback != null) {
             bondStateCallback.error("Aborted by new bond call");
@@ -1024,7 +1130,7 @@ public class Peripheral extends BluetoothGattCallback {
             }
         }
     }
-    
+
     @RequiresPermission("android.permission.BLUETOOTH_CONNECT")
     public void unbond(CallbackContext callbackContext) {
         final int bondState = device.getBondState();
